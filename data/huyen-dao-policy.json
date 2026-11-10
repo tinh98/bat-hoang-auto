@@ -1,0 +1,230 @@
+{
+  "schema": 1,
+  "version": "2026-11-10.1",
+  "updated_at": "2026-11-10",
+  "source": "docs/huyen-dao.md V0.3 + curated heuristics",
+  "weights": {
+    "tier": 1.0,
+    "upgrade": 0.9,
+    "slot": 1.2,
+    "synergy": 0.8,
+    "sustain": 1.0,
+    "shield": 0.8,
+    "damage": 0.7,
+    "economy": 0.6,
+    "risk": 1.2
+  },
+  "thresholds": {
+    "hpLow": 65,
+    "hpCritical": 40,
+    "llLow": 55,
+    "restCost": 2,
+    "itemCost": 3,
+    "maxSpells": 3,
+    "lateFloor": 10
+  },
+  "cp": {
+    "phong": {
+      "name": "Phong",
+      "tier": 4.6,
+      "tags": ["damage", "scaling"]
+    },
+    "hoa": {
+      "name": "Hỏa",
+      "tier": 4.6,
+      "tags": ["damage", "scaling"]
+    },
+    "loi": {
+      "name": "Lôi",
+      "tier": 3.2,
+      "tags": ["damage", "synergy"]
+    },
+    "kiem_tu": {
+      "name": "Kiếm Tu",
+      "tier": 3.6,
+      "tags": ["weapon", "sword"]
+    },
+    "kiem": {
+      "name": "Kiếm Tu",
+      "tier": 3.6,
+      "tags": ["weapon", "sword"]
+    },
+    "hon_don_the": {
+      "name": "Hỗn Độn Thể",
+      "tier": 3.0,
+      "tags": ["resist", "pvp"]
+    },
+    "hon_don": {
+      "name": "Hỗn Độn Thể",
+      "tier": 3.0,
+      "tags": ["resist", "pvp"]
+    }
+  },
+  "spells": {
+    "moc": {
+      "name": "Mộc",
+      "tier": 4.8,
+      "tags": ["sustain", "damage"],
+      "roles": ["sustain", "damage"]
+    },
+    "thuy": {
+      "name": "Thủy",
+      "tier": 4.6,
+      "tags": ["shield", "damage"],
+      "roles": ["shield", "damage"]
+    },
+    "hoa": {
+      "name": "Hỏa",
+      "tier": 4.0,
+      "tags": ["damage"],
+      "roles": ["damage"]
+    },
+    "loi": {
+      "name": "Lôi",
+      "tier": 3.4,
+      "tags": ["damage", "scaling"],
+      "roles": ["damage"]
+    },
+    "phong": {
+      "name": "Phong",
+      "tier": 3.4,
+      "tags": ["damage", "debuff"],
+      "roles": ["damage"]
+    },
+    "tho": {
+      "name": "Thổ",
+      "tier": 3.2,
+      "tags": ["defense", "damage"],
+      "roles": ["defense", "damage"]
+    }
+  },
+  "items": {
+    "loi_ma_chung": {
+      "name": "Lôi Ma Chung",
+      "slot": "weapon",
+      "tier": 5.0,
+      "tags": ["damage", "shield"]
+    },
+    "thien_xung_bao_gioi": {
+      "name": "Thiên Xung Bảo Giới",
+      "slot": "accessory",
+      "tier": 4.7,
+      "tags": ["spellpower", "damage"]
+    },
+    "pha_quan_toai_riu": {
+      "name": "Phá Quân Toái Rìu",
+      "slot": "weapon",
+      "tier": 4.6,
+      "tags": ["damage"]
+    },
+    "hai_kinh_thuong": {
+      "name": "Hải Kinh Thương",
+      "slot": "weapon",
+      "tier": 4.4,
+      "tags": ["damage", "pierce"]
+    },
+    "la_han_thuan": {
+      "name": "La Hán Thuẫn",
+      "slot": "weapon",
+      "tier": 4.2,
+      "tags": ["shield", "defense"]
+    },
+    "ngoc_tieu_bao": {
+      "name": "Ngọc Tiêu Bào",
+      "slot": "armor",
+      "tier": 4.0,
+      "tags": ["defense", "hp", "fire", "earth"]
+    },
+    "liet_diem_kiem": {
+      "name": "Liệt Diễm Kiếm",
+      "slot": "weapon",
+      "tier": 3.8,
+      "tags": ["sword", "damage", "scaling"]
+    },
+    "tinh_nghich_kiem": {
+      "name": "Tinh Nghịch Kiếm",
+      "slot": "weapon",
+      "tier": 3.8,
+      "tags": ["sword", "damage", "early"]
+    },
+    "bac_chan_chau": {
+      "name": "Bắc Chấn Châu",
+      "slot": "accessory",
+      "tier": 3.8,
+      "tags": ["physical", "damage"]
+    },
+    "thien_lang_anh_kiem": {
+      "name": "Thiên Lăng Ảnh Kiếm",
+      "slot": "weapon",
+      "tier": 3.4,
+      "tags": ["sword", "damage", "scaling"]
+    },
+    "huyen_thiet_bao": {
+      "name": "Huyền Thiết Bào",
+      "slot": "armor",
+      "tier": 3.4,
+      "tags": ["defense", "water"]
+    },
+    "nguyen_bao_giap": {
+      "name": "Nguyên Bảo Giáp",
+      "slot": "armor",
+      "tier": 3.2,
+      "tags": ["defense", "earth"]
+    },
+    "phong_thien_ky": {
+      "name": "Phong Thiên Kỳ",
+      "slot": "weapon",
+      "tier": 3.2,
+      "tags": ["damage", "scaling"]
+    },
+    "duong_khi_bao": {
+      "name": "Dưỡng Khí Bào",
+      "slot": "armor",
+      "tier": 3.0,
+      "tags": ["hp", "fire"]
+    },
+    "thien_co_bao": {
+      "name": "Thiên Cơ Bào",
+      "slot": "armor",
+      "tier": 3.0,
+      "tags": ["hp", "fire"]
+    },
+    "ham_dia_chuy": {
+      "name": "Hàm Địa Chùy",
+      "slot": "weapon",
+      "tier": 3.0,
+      "tags": ["damage", "stun"]
+    },
+    "nam_bao_gioi": {
+      "name": "Nam Bảo Giới",
+      "slot": "accessory",
+      "tier": 3.0,
+      "tags": ["defense", "earth"]
+    },
+    "hoi_chi_boi": {
+      "name": "Hồi Chi Bội",
+      "slot": "accessory",
+      "tier": 3.0,
+      "tags": ["hp", "fire"]
+    },
+    "kim_ty_long_dao": {
+      "name": "Kim Tỷ Long Đao",
+      "slot": "weapon",
+      "tier": 2.8,
+      "tags": ["damage", "scaling"]
+    },
+    "toai_tinh_kiem": {
+      "name": "Toái Tinh Kiếm",
+      "slot": "weapon",
+      "tier": 2.8,
+      "tags": ["sword", "damage"]
+    }
+  },
+  "synergies": [
+    {"cp": "phong", "spell": "phong", "bonus": 1.0},
+    {"cp": "hoa", "spell": "hoa", "bonus": 1.0},
+    {"cp": "loi", "spell": "loi", "bonus": 1.2},
+    {"cp": "kiem_tu", "itemTag": "sword", "bonus": 1.5},
+    {"cp": "kiem", "itemTag": "sword", "bonus": 1.5}
+  ]
+}

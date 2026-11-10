@@ -4,7 +4,7 @@
   const WARN = (...args) => console.warn(TAG, ...args);
 
   if (window.__baHoangAuto) {
-    LOG('Script đã được nạp trước đó. Gõ auto(), autoCauCa(), autoLinhDien() hoặc autoBoss() để chạy.');
+    LOG('Script đã được nạp trước đó. Gõ auto(), autoCauCa(), autoLinhDien(), autoBoss() hoặc autoHuyenDao() để chạy.');
     if (typeof window.showAuto === 'function') window.showAuto();
     return;
   }
@@ -74,11 +74,29 @@
     attacks: 0,
   };
 
+  const huyen = {
+    key: 'huyenDao',
+    running: false,
+    loopId: 0,
+    delay: 650,
+    maxRuns: 5,
+    maxSteps: 800,
+    runs: 0,
+    steps: 0,
+    cpId: null,
+    policy: null,
+    policyIndex: null,
+    policyUrl: null,
+    lastStatus: null,
+    lastChoice: null,
+  };
+
   const features = {
     diTich: { label: 'Di Tích', icon: '⚔️', state },
     fish: { label: 'Câu Cá', icon: '🎣', state: fish },
     farm: { label: 'Linh Điền', icon: '🌾', state: farm },
     boss: { label: 'Boss Thế Giới', icon: '👹', state: boss },
+    huyenDao: { label: 'Huyễn Đạo', icon: '🌀', state: huyen },
   };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -210,8 +228,9 @@
       featureRow('fish') +
       featureRow('farm') +
       featureRow('boss') +
+      featureRow('huyenDao') +
       '<button data-start-all style="width:100%;margin-top:8px;padding:7px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-weight:700">Chạy tất cả</button>' +
-      '<div style="margin-top:8px;font-size:10px;color:#6b7280;line-height:1.5">auto() · autoCauCa() · autoLinhDien() · autoBoss() · showAuto()</div>';
+      '<div style="margin-top:8px;font-size:10px;color:#6b7280;line-height:1.5">auto() · autoCauCa() · autoLinhDien() · autoBoss() · autoHuyenDao() · showAuto()</div>';
     panel.querySelector('[data-stop-all]').addEventListener('click', () => stopAll('Người dùng bấm Dừng tất cả'));
     panel.querySelector('[data-start-all]').addEventListener('click', () => startAll());
     panel.querySelector('[data-hide]').addEventListener('click', () => {
@@ -987,6 +1006,858 @@
     }
   };
 
+  const H_POLICY_URL = 'https://tinh98.github.io/bat-hoang-auto/data/huyen-dao-policy.json';
+  const H_POLICY_CACHE = 'ba-hoang-huyen-dao-policy-v1';
+  const H_POLICY_TTL = 6 * 60 * 60 * 1000;
+  const H_DEFAULT_WEIGHTS = {
+    tier: 1,
+    upgrade: 0.9,
+    slot: 1.2,
+    synergy: 0.8,
+    sustain: 1,
+    shield: 0.8,
+    damage: 0.7,
+    economy: 0.6,
+    risk: 1.2,
+  };
+  const H_DEFAULT_THRESHOLDS = {
+    hpLow: 65,
+    hpCritical: 40,
+    llLow: 55,
+    restCost: 2,
+    itemCost: 3,
+    maxSpells: 3,
+    lateFloor: 10,
+  };
+
+  const hKey = (value) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+
+  const hValidPolicy = (policy) =>
+    !!policy &&
+    typeof policy === 'object' &&
+    policy.schema === 1 &&
+    !!policy.cp &&
+    typeof policy.cp === 'object' &&
+    Object.keys(policy.cp).length > 0 &&
+    !!policy.spells &&
+    typeof policy.spells === 'object' &&
+    Object.keys(policy.spells).length > 0 &&
+    !!policy.items &&
+    typeof policy.items === 'object' &&
+    Object.keys(policy.items).length > 0 &&
+    !!policy.weights &&
+    typeof policy.weights === 'object' &&
+    !!policy.thresholds &&
+    typeof policy.thresholds === 'object';
+
+  const hReadPolicyCache = () => {
+    try {
+      const raw = localStorage.getItem(H_POLICY_CACHE);
+      if (!raw) return null;
+      const cached = JSON.parse(raw);
+      if (!cached || !cached.at || !cached.policy || !cached.url) return null;
+      return cached;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const hWritePolicyCache = (cached) => {
+    try {
+      localStorage.setItem(H_POLICY_CACHE, JSON.stringify(cached));
+    } catch (_) {}
+  };
+
+  const hIndexPolicy = (policy) => {
+    const index = { cp: {}, spells: {}, items: {} };
+    const add = (bucket, key, entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      const names = [key, entry.id, entry.name].concat(Array.isArray(entry.aliases) ? entry.aliases : []);
+      names.forEach((name) => {
+        const normalized = hKey(name);
+        if (normalized && !bucket[normalized]) bucket[normalized] = entry;
+      });
+    };
+    Object.keys(policy.cp || {}).forEach((key) => add(index.cp, key, policy.cp[key]));
+    Object.keys(policy.spells || {}).forEach((key) => add(index.spells, key, policy.spells[key]));
+    Object.keys(policy.items || {}).forEach((key) => add(index.items, key, policy.items[key]));
+    return index;
+  };
+
+  const hLoadPolicy = async (force, url) => {
+    const target = url || huyen.policyUrl || H_POLICY_URL;
+    if (!force && huyen.policy && huyen.policyUrl === target) return huyen.policy;
+    const cached = hReadPolicyCache();
+    if (
+      !force &&
+      cached &&
+      cached.url === target &&
+      Date.now() - cached.at < H_POLICY_TTL &&
+      hValidPolicy(cached.policy)
+    ) {
+      huyen.policy = cached.policy;
+      huyen.policyIndex = hIndexPolicy(cached.policy);
+      huyen.policyUrl = target;
+      return cached.policy;
+    }
+    try {
+      const separator = target.indexOf('?') === -1 ? '?' : '&';
+      const response = await fetch(target + separator + 'v=' + Date.now(), {
+        method: 'GET',
+        credentials: 'omit',
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const policy = await response.json();
+      if (!hValidPolicy(policy)) throw new Error('sai schema policy');
+      huyen.policy = policy;
+      huyen.policyIndex = hIndexPolicy(policy);
+      huyen.policyUrl = target;
+      hWritePolicyCache({ at: Date.now(), url: target, policy });
+      return policy;
+    } catch (error) {
+      if (cached && hValidPolicy(cached.policy)) {
+        huyen.policy = cached.policy;
+        huyen.policyIndex = hIndexPolicy(cached.policy);
+        huyen.policyUrl = target;
+        WARN('Không tải được policy Huyễn Đạo, dùng cache:', error && error.message);
+        return cached.policy;
+      }
+      throw new Error('không tải được policy Huyễn Đạo: ' + ((error && error.message) || 'lỗi mạng'));
+    }
+  };
+
+  const hWeights = (policy) => Object.assign({}, H_DEFAULT_WEIGHTS, (policy && policy.weights) || {});
+  const hThresholds = (policy) => Object.assign({}, H_DEFAULT_THRESHOLDS, (policy && policy.thresholds) || {});
+  const hFind = (index, bucket, id, name) => {
+    const table = index && index[bucket];
+    if (!table) return null;
+    return table[hKey(id)] || table[hKey(name)] || null;
+  };
+  const hPct = (value, max) => {
+    const current = num(value);
+    const total = num(max);
+    if (current === null || total === null || total <= 0) return null;
+    return Math.max(0, Math.min(100, Math.round((current * 100) / total)));
+  };
+  const hTierLevel = (tier) => {
+    const value = String(tier || '').toLowerCase();
+    return value === 'thien' ? 2 : value === 'linh' ? 1 : 0;
+  };
+  const hPower = (entry, tier) => {
+    const base = entry && num(entry.tier) !== null ? num(entry.tier) : 2.5;
+    return base + hTierLevel(tier) * 0.35;
+  };
+  const hTags = (entry) => (entry && Array.isArray(entry.tags) ? entry.tags : []);
+  const hHasTag = (entry, tag) => hTags(entry).indexOf(tag) !== -1;
+  const hInferSlot = (name) => {
+    const key = hKey(name);
+    if (/(kiem|dao|thuong|riu|chuy|chung|dai)/.test(key)) return 'weapon';
+    if (/(boi|chau|gioi)/.test(key)) return 'accessory';
+    if (/(giap|bao)/.test(key)) return 'armor';
+    return null;
+  };
+  const hItemInfo = (index, raw) =>
+    hFind(index, 'items', raw && (raw.item_id || raw.id), raw && (raw.ten || raw.name));
+  const hSpellInfo = (index, raw) =>
+    hFind(index, 'spells', raw && (raw.lineage_id || raw.id), raw && (raw.ten || raw.name));
+  const hSlotOf = (entry, raw) => {
+    if (entry && entry.slot) return entry.slot;
+    return hInferSlot(
+      (raw && (raw.ten || raw.name || raw.item_id || raw.id)) || (entry && entry.name) || '',
+    );
+  };
+  const hSpells = (status) => (status && Array.isArray(status.thuat_phap) ? status.thuat_phap : []);
+  const hItems = (status) => (status && Array.isArray(status.phap_bao) ? status.phap_bao : []);
+  const hCpKey = (status) => {
+    const raw = huyen.cpId || (status && (status.cp_id || status.cp));
+    if (!raw) return null;
+    if (typeof raw === 'string') return raw;
+    return raw.id || raw.cp_id || raw.name || null;
+  };
+  const hSpellRaw = (status, id, name) =>
+    hSpells(status).find(
+      (raw) => hKey(raw.lineage_id || raw.id) === hKey(id) || hKey(raw.ten || raw.name) === hKey(name),
+    ) || null;
+
+  const hSpellBase = (entry, status, policy, cpKey, tier) => {
+    const weights = hWeights(policy);
+    const thresholds = hThresholds(policy);
+    const hp = hPct(status.hp, status.max_hp);
+    const ll = hPct(status.ll, status.max_ll);
+    const tags = hTags(entry);
+    let score = hPower(entry, tier) * weights.tier;
+    if (tags.indexOf('sustain') !== -1) {
+      if (hp !== null && hp <= thresholds.hpLow) {
+        score += weights.sustain * (1.1 + (thresholds.hpLow - hp) / Math.max(1, thresholds.hpLow));
+      }
+      if (ll !== null && ll <= thresholds.llLow) score += weights.sustain * 0.5;
+    }
+    if (tags.indexOf('shield') !== -1 && hp !== null && hp <= thresholds.hpLow) {
+      score += weights.shield * 1.2;
+    }
+    if (tags.indexOf('damage') !== -1) score += weights.damage * 0.3;
+    if (tags.indexOf('scaling') !== -1) score += weights.damage * 0.2;
+    ((policy && policy.synergies) || []).forEach((synergy) => {
+      if (!cpKey || hKey(synergy.cp) !== hKey(cpKey)) return;
+      if (synergy.spell && hKey(synergy.spell) === hKey((entry && entry.name) || '')) {
+        score += numField(synergy.bonus, 0) * weights.synergy;
+      }
+      if (synergy.spellTag && tags.indexOf(synergy.spellTag) !== -1) {
+        score += numField(synergy.bonus, 0) * weights.synergy;
+      }
+    });
+    return score;
+  };
+
+  const hItemBase = (entry, tier, status, policy, cpKey) => {
+    const weights = hWeights(policy);
+    const thresholds = hThresholds(policy);
+    const hp = hPct(status.hp, status.max_hp);
+    const tags = hTags(entry);
+    let score = hPower(entry, tier) * weights.tier;
+    if (tags.indexOf('damage') !== -1) score += weights.damage * 0.35;
+    if (tags.indexOf('shield') !== -1 || tags.indexOf('defense') !== -1) score += weights.shield * 0.25;
+    if (
+      hp !== null &&
+      hp <= thresholds.hpLow &&
+      (tags.indexOf('hp') !== -1 || tags.indexOf('defense') !== -1 || tags.indexOf('shield') !== -1)
+    ) {
+      score += weights.shield * 0.65;
+    }
+    if (cpKey && tags.indexOf('sword') !== -1 && /kiem/.test(hKey(cpKey))) {
+      score += weights.synergy * 1.2;
+    }
+    ((policy && policy.synergies) || []).forEach((synergy) => {
+      if (!cpKey || hKey(synergy.cp) !== hKey(cpKey)) return;
+      if (synergy.itemTag && tags.indexOf(synergy.itemTag) !== -1) {
+        score += numField(synergy.bonus, 0) * weights.synergy;
+      }
+    });
+    return score;
+  };
+
+  const hSpellEntries = (status, policy, index) =>
+    hSpells(status).map((raw) => {
+      const entry = hSpellInfo(index, raw);
+      return {
+        raw,
+        entry,
+        base: hSpellBase(entry, status, policy, hCpKey(status), raw && raw.tier),
+      };
+    });
+
+  const hRoleGapBonus = (entry, current, hp, ll, weights, thresholds) => {
+    const tags = hTags(entry);
+    const roles = {};
+    current.forEach((item) => {
+      hTags(item.entry).forEach((tag) => {
+        roles[tag] = true;
+      });
+    });
+    let bonus = 0;
+    if (tags.indexOf('sustain') !== -1 && !roles.sustain) {
+      bonus += weights.sustain * (hp !== null && hp <= thresholds.hpLow ? 1.1 : 0.5);
+    }
+    if (tags.indexOf('shield') !== -1 && !roles.shield) {
+      bonus += weights.shield * (hp !== null && hp <= thresholds.hpLow ? 0.9 : 0.4);
+    }
+    if (tags.indexOf('damage') !== -1 && !roles.damage) bonus += weights.damage * 0.5;
+    return bonus;
+  };
+
+  const hCampNeed = (status, thresholds) => {
+    const hp = hPct(status.hp, status.max_hp);
+    const ll = hPct(status.ll, status.max_ll);
+    const hpGap = hp === null ? 0 : Math.max(0, thresholds.hpLow - hp) / Math.max(1, thresholds.hpLow);
+    const llGap = ll === null ? 0 : Math.max(0, thresholds.llLow - ll) / Math.max(1, thresholds.llLow);
+    return {
+      hp,
+      ll,
+      need: hpGap * 1.6 + llGap * 0.8 + (hp !== null && hp <= thresholds.hpCritical ? 1 : 0),
+    };
+  };
+
+  const hSlotProposals = (status, pendingId, pendingName, spells) => {
+    const names = status.thuat_phap_offer_names || {};
+    const proposals = spells.map((raw, idx) => ({
+      id: 'spell:overwrite:' + idx,
+      kind: 'spell_overwrite',
+      payload: { slot_idx: idx },
+      label: 'Thay ' + (raw.ten || raw.name || 'slot ' + idx) + ' bằng ' + pendingName,
+      meta: { slot_idx: idx, lineage_id: pendingId, name: pendingName, oldName: raw.ten || raw.name },
+    }));
+    (status.thuat_phap_offers || []).forEach((id) => {
+      if (hKey(id) === hKey(pendingId)) return;
+      proposals.push({
+        id: 'spell:choose:' + id,
+        kind: 'spell_choose',
+        payload: { lineage_id: id },
+        label: 'Đổi sang ' + (names[id] || id),
+        meta: { lineage_id: id, name: names[id] || id },
+      });
+    });
+    proposals.push({
+      id: 'spell:cancel',
+      kind: 'spell_cancel',
+      payload: {},
+      label: 'Hủy chọn thuật pháp',
+      meta: {},
+    });
+    return proposals;
+  };
+
+  const hSpellProposals = (status) => {
+    const offers = Array.isArray(status.thuat_phap_offers) ? status.thuat_phap_offers : [];
+    const names = status.thuat_phap_offer_names || {};
+    const spells = hSpells(status);
+    if (status.needs_slot_pick && status.slot_pick_lineage_id) {
+      const pendingId = status.slot_pick_lineage_id;
+      return hSlotProposals(status, pendingId, names[pendingId] || pendingId, spells);
+    }
+    const proposals = offers.map((id) => {
+      const existing = hSpellRaw(status, id, names[id] || id);
+      return {
+        id: 'spell:pick:' + id,
+        kind: 'spell_pick',
+        payload: { lineage_id: id },
+        label: (existing ? 'Nâng cấp ' : 'Học ') + (names[id] || id),
+        meta: { lineage_id: id, name: names[id] || id, tier: existing ? existing.tier : null },
+      };
+    });
+    if (spells.length >= 3) {
+      proposals.push({
+        id: 'spell:skip',
+        kind: 'spell_skip',
+        payload: {},
+        label: 'Bỏ qua thuật pháp',
+        meta: {},
+      });
+    }
+    return proposals;
+  };
+
+  const hCampProposals = (status) => {
+    const proposals = [];
+    if (numField(status.tao_hoa_te, 0) >= 2) {
+      proposals.push({
+        id: 'camp:rest',
+        kind: 'camp_rest',
+        payload: { do_rest: true },
+        label: 'Nghỉ (2 Tạo Hóa Tệ)',
+        meta: {},
+      });
+    }
+    proposals.push({
+      id: 'camp:skip',
+      kind: 'camp_skip',
+      payload: { do_rest: false },
+      label: 'Bỏ qua nghỉ',
+      meta: {},
+    });
+    return proposals;
+  };
+
+  const hShopProposals = (status) => {
+    const offers = status.shop_offers || {};
+    const items = Array.isArray(offers.items) ? offers.items : [];
+    const names = offers.item_names || {};
+    const descriptions = offers.item_descriptions || {};
+    const purchased = Array.isArray(offers.purchased) ? offers.purchased : [];
+    const owned = hItems(status);
+    const currency = numField(status.tao_hoa_te, 0);
+    const proposals = [];
+    items.forEach((itemId) => {
+      if (purchased.some((id) => hKey(id) === hKey(itemId))) return;
+      const name = names[itemId] || itemId;
+      const same = owned.find(
+        (raw) =>
+          hKey(raw.item_id) === hKey(itemId) ||
+          (name && hKey(raw.ten || raw.name) === hKey(name)),
+      );
+      if (same && String(same.tier || '').toLowerCase() === 'thien') return;
+      if (currency < 3) return;
+      proposals.push({
+        id: 'shop:buy:' + itemId,
+        kind: 'shop_buy',
+        payload: { item_id: itemId },
+        label: (same ? 'Nâng cấp ' : 'Mua ') + name,
+        meta: {
+          item_id: itemId,
+          name,
+          description: descriptions[itemId] || '',
+          tier: same ? same.tier : null,
+        },
+      });
+    });
+    const biKy = offers.bi_ky;
+    if (
+      biKy &&
+      !offers.bi_ky_purchased &&
+      hSpells(status).length > 0 &&
+      currency >= numField(biKy.price, 0)
+    ) {
+      proposals.push({
+        id: 'shop:bi-ky',
+        kind: 'shop_bi_ky',
+        payload: {},
+        label: 'Mua Bí Kỹ (' + numField(biKy.price, 0) + ' Tạo Hóa Tệ)',
+        meta: { price: numField(biKy.price, 0), qty: numField(biKy.qty, 0) },
+      });
+    }
+    const rerollCost = numField(status.reroll_cost, 0);
+    if (rerollCost > 0 && currency >= rerollCost) {
+      proposals.push({
+        id: 'shop:reroll',
+        kind: 'shop_reroll',
+        payload: {},
+        label: 'Đổi lại shop (' + rerollCost + ')',
+        meta: { cost: rerollCost },
+      });
+    }
+    proposals.push({
+      id: 'shop:leave',
+      kind: 'shop_leave',
+      payload: {},
+      label: 'Rời cửa hàng',
+      meta: {},
+    });
+    return proposals;
+  };
+
+  const hBuildProposals = (status, cpChoices) => {
+    if (!status || typeof status !== 'object') return [];
+    const active = !!status.has_active_run;
+    if (!active) {
+      if (status.is_open === false || status.block_reason) return [];
+      const ids = (cpChoices && cpChoices.cp_ids) || [];
+      const names = (cpChoices && cpChoices.cp_names) || [];
+      return ids.map((id, idx) => ({
+        id: 'start:' + id,
+        kind: 'start',
+        payload: { cp_id: id },
+        label: 'Bắt đầu ' + (names[idx] || id),
+        meta: { id, name: names[idx] || id },
+      }));
+    }
+    const type = String(status.floor_type || '');
+    const floor = num(status.floor);
+    if (type === 'quai' || type === 'quai_dai_yeu' || type === 'boss') {
+      if (floor === null) return [];
+      return [
+        {
+          id: 'fight:' + floor,
+          kind: 'fight',
+          payload: { expected_floor: floor },
+          label: 'Đánh tầng ' + floor,
+          meta: { floor },
+        },
+      ];
+    }
+    if (type === 'thuat_phap' || status.needs_slot_pick) return hSpellProposals(status);
+    if (type === 'camp') return hCampProposals(status);
+    if (type === 'shop') return hShopProposals(status);
+    return [];
+  };
+
+  const hBestShopScore = (proposals, status, policy, index) => {
+    const values = proposals
+      .filter((proposal) => proposal.kind === 'shop_buy')
+      .map((proposal) => hScoreProposal(proposal, proposals, status, policy, index).score)
+      .filter((value) => Number.isFinite(value));
+    return values.length ? Math.max.apply(null, values) : -Infinity;
+  };
+
+  const hScoreProposal = (proposal, proposals, status, policy, index) => {
+    const weights = hWeights(policy);
+    const thresholds = hThresholds(policy);
+    const hp = hPct(status.hp, status.max_hp);
+    const ll = hPct(status.ll, status.max_ll);
+    const currency = numField(status.tao_hoa_te, 0);
+    const cpKey = hCpKey(status);
+    const item = proposal;
+    if (item.kind === 'start') {
+      const entry = hFind(index, 'cp', item.meta.id, item.meta.name);
+      let score = entry ? hPower(entry, null) * weights.tier : 2.5;
+      if (entry && hHasTag(entry, 'sword')) score -= weights.risk * 0.6;
+      return {
+        score,
+        reason: (entry ? entry.name : item.meta.name) + ' · tier ' + (entry && entry.tier ? entry.tier : '?'),
+      };
+    }
+    if (item.kind === 'fight') return { score: 100, reason: 'bắt buộc đánh' };
+    if (item.kind === 'spell_pick') {
+      const entry = hFind(index, 'spells', item.meta.lineage_id, item.meta.name);
+      const existing = hSpellRaw(status, item.meta.lineage_id, item.meta.name);
+      if (existing) {
+        if (String(existing.tier || '').toLowerCase() === 'thien') {
+          return { score: -100, reason: 'đã đạt tier tối đa' };
+        }
+        return {
+          score: hSpellBase(entry, status, policy, cpKey, item.meta.tier) + weights.upgrade * 0.9 + 0.7,
+          reason: 'nâng cấp ' + (entry ? entry.name : item.meta.name),
+        };
+      }
+      const current = hSpellEntries(status, policy, index);
+      let score = hSpellBase(entry, status, policy, cpKey, item.meta.tier);
+      score += hRoleGapBonus(entry, current, hp, ll, weights, thresholds);
+      if (current.length >= 3) {
+        const weakest = current.slice().sort((a, b) => a.base - b.base)[0];
+        if (weakest) score -= weakest.base + weights.risk * 0.35;
+        score -= weights.risk * 0.25;
+      }
+      return {
+        score,
+        reason: (entry ? entry.name : item.meta.name) + ' · ' + (hTags(entry).join('/') || 'không rõ'),
+      };
+    }
+    if (item.kind === 'spell_overwrite') {
+      const entry = hFind(index, 'spells', item.meta.lineage_id, item.meta.name);
+      const slotRaw = hSpells(status)[numField(item.meta.slot_idx, 0)];
+      const slotEntry = hSpellInfo(index, slotRaw);
+      const candidate = hSpellBase(entry, status, policy, cpKey, null);
+      const old = hSpellBase(slotEntry, status, policy, cpKey, slotRaw && slotRaw.tier);
+      let score = candidate - old - weights.risk * 0.5;
+      if (candidate > old + 0.4) score += weights.upgrade * 0.4;
+      return {
+        score,
+        reason: 'thay ' + (item.meta.oldName || '?') + ' bằng ' + item.meta.name,
+      };
+    }
+    if (item.kind === 'spell_choose') {
+      const entry = hFind(index, 'spells', item.meta.lineage_id, item.meta.name);
+      const pendingId = status.slot_pick_lineage_id;
+      const pendingName = (status.thuat_phap_offer_names || {})[pendingId] || pendingId;
+      const pending = hFind(index, 'spells', pendingId, pendingName);
+      const alternate = hSpellBase(entry, status, policy, cpKey, null);
+      const old = hSpellBase(pending, status, policy, cpKey, null);
+      return {
+        score: alternate - old - 0.1,
+        reason: 'đổi offer sang ' + item.meta.name,
+      };
+    }
+    if (item.kind === 'spell_skip') return { score: 0.3, reason: 'bỏ qua offer' };
+    if (item.kind === 'spell_cancel') return { score: 0.2, reason: 'hủy thay thuật pháp' };
+    if (item.kind === 'camp_rest' || item.kind === 'camp_skip') {
+      const camp = hCampNeed(status, thresholds);
+      if (item.kind === 'camp_rest') {
+        return {
+          score:
+            camp.need * weights.sustain * 2 +
+            (numField(status.floor, 0) >= thresholds.lateFloor ? 0.8 : 0) -
+            weights.economy * 0.2,
+          reason: 'HP ' + (camp.hp === null ? '?' : camp.hp + '%') + ' · LL ' + (camp.ll === null ? '?' : camp.ll + '%'),
+        };
+      }
+      return {
+        score: 0.6 + (camp.need <= 0.05 ? 1 : 0) - camp.need * 0.8,
+        reason: 'bỏ qua nghỉ',
+      };
+    }
+    if (item.kind === 'shop_buy') {
+      const entry = hFind(index, 'items', item.meta.item_id, item.meta.name);
+      const slot = hSlotOf(entry, item.meta);
+      const ownedSame = hItems(status).find(
+        (raw) =>
+          hKey(raw.item_id) === hKey(item.meta.item_id) ||
+          (item.meta.name && hKey(raw.ten || raw.name) === hKey(item.meta.name)),
+      );
+      if (ownedSame && String(ownedSame.tier || '').toLowerCase() === 'thien') {
+        return { score: -100, reason: 'đã đạt tier tối đa' };
+      }
+      let score = hItemBase(entry, item.meta.tier, status, policy, cpKey);
+      if (ownedSame) {
+        score += weights.upgrade * 0.9 + 0.5;
+      } else if (slot) {
+        const ownedInSlot = hItems(status).filter(
+          (raw) => hSlotOf(hItemInfo(index, raw), raw) === slot,
+        );
+        if (!ownedInSlot.length) {
+          score += weights.slot * 1.6;
+        } else {
+          const old = ownedInSlot[0];
+          const oldEntry = hItemInfo(index, old);
+          const oldPower = hPower(oldEntry, old.tier);
+          const newPower = hPower(entry, item.meta.tier);
+          score += (newPower - oldPower) * weights.upgrade;
+          if (newPower <= oldPower) score -= weights.slot * 0.9;
+        }
+      }
+      if (!entry) score -= weights.risk * 0.8;
+      const hasWeapon = hItems(status).some(
+        (raw) => hSlotOf(hItemInfo(index, raw), raw) === 'weapon',
+      );
+      if (slot === 'weapon' && !hasWeapon) {
+        score += weights.slot * 0.8;
+        if (numField(status.floor, 0) <= 6) score += 0.8;
+      }
+      if (hp !== null && hp <= thresholds.hpLow) {
+        if (['shield', 'sustain', 'defense', 'hp'].some((tag) => hHasTag(entry, tag))) {
+          score += weights.shield * 0.5;
+        } else {
+          score -= weights.risk * 0.35;
+        }
+      }
+      if (currency <= thresholds.itemCost + 1 && hp !== null && hp <= thresholds.hpLow) {
+        score -= weights.risk * 0.5;
+      }
+      score -= weights.economy * 0.2;
+      return {
+        score,
+        reason: (entry ? entry.name : item.meta.name) + ' · ' + (slot || '?') + ' · ' + (hTags(entry).join('/') || 'không rõ'),
+      };
+    }
+    if (item.kind === 'shop_bi_ky') {
+      const current = hSpellEntries(status, policy, index);
+      const average = current.length
+        ? current.reduce(
+            (sum, spell) => sum + (spell.entry ? hPower(spell.entry, spell.raw.tier) : 2.5),
+            0,
+          ) / current.length
+        : 0;
+      let score =
+        0.9 +
+        (current.length >= 3 ? 0.5 : 0) +
+        (average - 3.5) * 0.6 -
+        numField(item.meta.price, 0) * 0.05;
+      if (currency < numField(item.meta.price, 0) + 2) score -= 0.8;
+      if (hp !== null && hp <= thresholds.hpLow) score -= weights.risk * 0.3;
+      return {
+        score,
+        reason: 'Bí Kỹ x' + numField(item.meta.qty, 0) + ' · tier TB ' + average.toFixed(1),
+      };
+    }
+    if (item.kind === 'shop_reroll') {
+      const best = hBestShopScore(proposals, status, policy, index);
+      let score = best < 2.2 ? 1.1 : -1;
+      if (currency >= numField(item.meta.cost, 0) + 3) score += 0.3;
+      else score -= 0.6;
+      if (hp !== null && hp <= thresholds.hpLow) score -= 0.3;
+      return {
+        score,
+        reason: 'offer tốt nhất ' + (Number.isFinite(best) ? best.toFixed(1) : '?'),
+      };
+    }
+    if (item.kind === 'shop_leave') {
+      const best = hBestShopScore(proposals, status, policy, index);
+      let score = 0.4;
+      if (!Number.isFinite(best) || best < 2) score += 0.8;
+      if (currency < thresholds.itemCost) score += 0.5;
+      if (hp !== null && hp <= thresholds.hpLow) score += 0.4;
+      if (hSpells(status).length >= 3) score += 0.2;
+      return {
+        score,
+        reason: 'offer tốt nhất ' + (Number.isFinite(best) ? best.toFixed(1) : '?'),
+      };
+    }
+    return { score: -Infinity, reason: 'không hỗ trợ' };
+  };
+
+  const hStatusText = (status, started) => {
+    const ai = numField(status.ai_idx, -1);
+    const floor = num(status.floor);
+    const hp = hPct(status.hp, status.max_hp);
+    const ll = hPct(status.ll, status.max_ll);
+    const currency = numField(status.tao_hoa_te, 0);
+    if (!status.has_active_run) {
+      return (
+        'Chuẩn bị run · 💰 ' +
+        currency +
+        ' · Run ' +
+        started +
+        '/' +
+        (huyen.maxRuns === Infinity ? '∞' : huyen.maxRuns)
+      );
+    }
+    const parts = [
+      'Ải ' + (ai >= 0 ? ai + 1 + '/5' : '?/5'),
+      'Tầng ' + (floor === null ? '?/12' : floor + '/12'),
+    ];
+    if (hp !== null) parts.push('HP ' + hp + '%');
+    if (ll !== null) parts.push('LL ' + ll + '%');
+    parts.push('💰 ' + currency);
+    parts.push('Run ' + started + '/' + (huyen.maxRuns === Infinity ? '∞' : huyen.maxRuns));
+    return parts.join(' · ');
+  };
+
+  const hExecute = async (proposal) => {
+    const item = proposal;
+    if (item.kind === 'start') {
+      const result = await apiPost('/huyen-dao-ss2/start', { cp_id: item.payload.cp_id });
+      huyen.cpId = item.payload.cp_id;
+      return result;
+    }
+    if (item.kind === 'fight') {
+      return apiPost('/huyen-dao-ss2/fight', { expected_floor: item.payload.expected_floor });
+    }
+    if (item.kind === 'spell_pick' || item.kind === 'spell_choose') {
+      return apiPost('/huyen-dao-ss2/thuat-phap', { lineage_id: item.payload.lineage_id });
+    }
+    if (item.kind === 'spell_overwrite') {
+      return apiPost('/huyen-dao-ss2/thuat-phap/overwrite', { slot_idx: item.payload.slot_idx });
+    }
+    if (item.kind === 'spell_skip') return apiPost('/huyen-dao-ss2/thuat-phap/skip');
+    if (item.kind === 'spell_cancel') return apiPost('/huyen-dao-ss2/thuat-phap/cancel');
+    if (item.kind === 'camp_rest' || item.kind === 'camp_skip') {
+      return apiPost('/huyen-dao-ss2/camp', { do_rest: item.kind === 'camp_rest' });
+    }
+    if (item.kind === 'shop_buy') {
+      try {
+        return await apiPost('/huyen-dao-ss2/shop/buy', {
+          item_id: item.payload.item_id,
+          confirm: false,
+        });
+      } catch (error) {
+        if (error && error.status === 409) {
+          return apiPost('/huyen-dao-ss2/shop/buy', {
+            item_id: item.payload.item_id,
+            confirm: true,
+          });
+        }
+        throw error;
+      }
+    }
+    if (item.kind === 'shop_bi_ky') return apiPost('/huyen-dao-ss2/shop/bi-ky');
+    if (item.kind === 'shop_reroll') return apiPost('/huyen-dao-ss2/shop/reroll');
+    if (item.kind === 'shop_leave') return apiPost('/huyen-dao-ss2/shop/leave');
+    throw new Error('hành động Huyễn Đạo không hỗ trợ: ' + item.kind);
+  };
+
+  const huyenLoop = async (id) => {
+    const fs = huyen;
+    let failures = 0;
+    let started = 0;
+    let steps = 0;
+    while (runningOf(fs, id)) {
+      try {
+        if (!fs.policy || !fs.policyIndex) {
+          setFeatureStatus(fs.key, 'Đang tải data Huyễn Đạo...', 'wait');
+          await hLoadPolicy(true, fs.policyUrl);
+        }
+        const status = await apiGet('/huyen-dao-ss2/status');
+        if (!status || typeof status !== 'object') throw new Error('status Huyễn Đạo rỗng');
+        fs.lastStatus = status;
+        if (!status.has_active_run) {
+          if (status.is_open === false) {
+            stopFeature(fs.key, 'Huyễn Đạo chưa mở');
+            return;
+          }
+          if (status.block_reason) {
+            stopFeature(fs.key, String(status.block_reason));
+            return;
+          }
+          const remain = num(status.runs_remaining);
+          if (remain !== null && remain <= 0) {
+            stopFeature(fs.key, 'hết lượt Huyễn Đạo hôm nay');
+            return;
+          }
+          if (started >= fs.maxRuns) {
+            stopFeature(fs.key, 'đã đạt giới hạn ' + fs.maxRuns + ' run');
+            return;
+          }
+        }
+        let cpChoices = null;
+        if (!status.has_active_run) cpChoices = await apiGet('/huyen-dao-ss2/cp-choices');
+        const proposals = hBuildProposals(status, cpChoices);
+        if (!proposals.length) {
+          stopFeature(fs.key, 'không có hành động hợp lệ');
+          return;
+        }
+        let proposal = proposals[0];
+        if (proposals.length === 1) {
+          fs.lastChoice = { id: proposal.id, score: null, reason: 'forced' };
+          setFeatureStatus(
+            fs.key,
+            hStatusText(status, started) + ' · Tự động: ' + proposal.label,
+            'running',
+          );
+        } else {
+          const scored = proposals
+            .map((candidate) => {
+              const result = hScoreProposal(candidate, proposals, status, fs.policy, fs.policyIndex);
+              return { proposal: candidate, score: result.score, reason: result.reason };
+            })
+            .sort((a, b) => b.score - a.score || a.proposal.id.localeCompare(b.proposal.id));
+          const best = scored[0];
+          proposal = best.proposal;
+          fs.lastChoice = { id: proposal.id, score: best.score, reason: best.reason };
+          setFeatureStatus(
+            fs.key,
+            hStatusText(status, started) +
+              ' · Chọn: ' +
+              proposal.label +
+              ' (' +
+              best.score.toFixed(1) +
+              ')',
+            'running',
+          );
+          LOG('Huyễn Đạo chọn:', proposal.id, Number(best.score.toFixed(2)), best.reason);
+        }
+        const result = await hExecute(proposal);
+        steps += 1;
+        fs.steps = steps;
+        if (proposal.kind === 'start') {
+          started += 1;
+          fs.runs = started;
+        }
+        if (result && typeof result === 'object' && result.has_active_run === false) {
+          const won = result.won;
+          const text =
+            'Kết thúc run: ' +
+            (won === true ? 'thắng' : won === false ? 'thua' : 'xong') +
+            (result.message ? ' · ' + result.message : '');
+          setFeatureStatus(fs.key, text, won === true ? 'ok' : 'warn');
+          LOG('Huyễn Đạo kết thúc run:', result.won, result.message, result.drops);
+          failures = 0;
+          await sleep(fs.delay);
+          continue;
+        }
+        if (steps >= fs.maxSteps) {
+          stopFeature(fs.key, 'đạt giới hạn ' + fs.maxSteps + ' bước an toàn');
+          return;
+        }
+        failures = 0;
+        await sleep(fs.delay);
+      } catch (error) {
+        failures += 1;
+        if (error && (error.status === 401 || error.status === 403)) {
+          stopFeature(fs.key, 'phiên đăng nhập hết hạn');
+          return;
+        }
+        if (
+          error &&
+          error.status >= 400 &&
+          error.status < 500 &&
+          error.status !== 409 &&
+          error.status !== 429 &&
+          failures >= 2
+        ) {
+          stopFeature(fs.key, 'lỗi: ' + ((error && error.message) || 'HTTP ' + error.status));
+          return;
+        }
+        setFeatureStatus(
+          fs.key,
+          'Lỗi: ' + ((error && error.message) || 'không xác định') + ' · thử lại...',
+          'error',
+        );
+        WARN('Huyễn Đạo lỗi:', error && error.status, error && error.message);
+        if (failures >= 5) {
+          stopFeature(fs.key, 'lỗi lặp lại: ' + ((error && error.message) || 'không xác định'));
+          return;
+        }
+        await waitRunning(fs, id, Math.min(5000, 700 * failures), 'Thử lại sau');
+      }
+    }
+  };
+
   const launch = (fs, loop, message, options) => {
     if (fs.running) {
       LOG(features[fs.key].label + ' đang chạy. Bấm Dừng hoặc gõ stopAll() để dừng.');
@@ -1086,11 +1957,60 @@
     launch(boss, bossLoop, 'Đang kiểm tra Boss Thế Giới...', options);
   }
 
+  function startHuyenDao(opts) {
+    if (huyen.running) {
+      LOG('Huyễn Đạo đang chạy rồi. Gõ stopAll() để dừng.');
+      showPanel();
+      return;
+    }
+    const options = typeof opts === 'number' ? { delay: opts } : opts && typeof opts === 'object' ? opts : {};
+    if (options.delay !== undefined) {
+      huyen.delay = Math.max(0, Math.min(5000, Number(options.delay) || 0));
+    }
+    if (options.maxRuns !== undefined) {
+      const parsed = Number(options.maxRuns);
+      huyen.maxRuns = Number.isFinite(parsed) && parsed > 0 ? Math.min(20, Math.floor(parsed)) : 5;
+    }
+    if (options.maxSteps !== undefined) {
+      const parsed = Number(options.maxSteps);
+      huyen.maxSteps =
+        Number.isFinite(parsed) && parsed > 0 ? Math.min(5000, Math.floor(parsed)) : 800;
+    }
+    if (options.policyUrl !== undefined) huyen.policyUrl = options.policyUrl || null;
+    huyen.running = true;
+    huyen.loopId += 1;
+    huyen.runs = 0;
+    huyen.steps = 0;
+    huyen.cpId = null;
+    huyen.policy = null;
+    huyen.policyIndex = null;
+    huyen.lastStatus = null;
+    huyen.lastChoice = null;
+    const id = huyen.loopId;
+    ensureOverlay();
+    setFeatureButton('huyenDao', true);
+    setFeatureStatus('huyenDao', 'Đang tải data Huyễn Đạo...', 'running');
+    LOG(
+      'Bắt đầu Huyễn Đạo. delay=' +
+        huyen.delay +
+        'ms, maxRuns=' +
+        huyen.maxRuns +
+        '. Gõ stopAll() để dừng.',
+    );
+    huyenLoop(id).catch((error) => {
+      WARN('Lỗi loop Huyễn Đạo:', error);
+      if (runningOf(huyen, id)) {
+        stopFeature('huyenDao', 'lỗi: ' + ((error && error.message) || 'không xác định'));
+      }
+    });
+  }
+
   function startAll() {
     startAuto();
     startCauCa();
     startLinhDien();
     startBoss();
+    startHuyenDao();
   }
 
   function stopFeature(key, reason) {
@@ -1132,6 +2052,7 @@
     else if (key === 'fish') startCauCa();
     else if (key === 'farm') startLinhDien();
     else if (key === 'boss') startBoss();
+    else if (key === 'huyenDao') startHuyenDao();
   }
 
   window.auto = startAuto;
@@ -1143,6 +2064,9 @@
   window.autoBoss = startBoss;
   window.autoBossTheGioi = startBoss;
   window.autoWorldBoss = startBoss;
+  window.autoHuyenDao = startHuyenDao;
+  window.autoHuyenDaoSS2 = startHuyenDao;
+  window.startHuyenDao = startHuyenDao;
   window.autoAll = startAll;
   window.stopAuto = stopAll;
   window.stopAll = stopAll;
@@ -1169,21 +2093,39 @@
     startCauCa,
     startLinhDien,
     startBoss,
+    startHuyenDao,
     startAll,
     stop: stopAll,
     stopFeature,
     api: apiRequest,
     show: showPanel,
+    scoreHuyenProposals: (status, cpChoices) =>
+      hBuildProposals(status, cpChoices).map((proposal) => ({
+        id: proposal.id,
+        kind: proposal.kind,
+        label: proposal.label,
+        ...hScoreProposal(proposal, hBuildProposals(status, cpChoices), status, huyen.policy, huyen.policyIndex),
+      })),
     get config() {
       return {
         diTich: { running: state.running, delay: state.delay, runs: state.runs, actions: state.actions },
         fish: { running: fish.running, delay: fish.delay, buys: fish.buys, fishes: fish.fishes, luot: fish.luot, moi: fish.moi },
         farm: { running: farm.running, delay: farm.delay, harvested: farm.harvested, watered: farm.watered, planted: farm.planted },
         boss: { running: boss.running, delay: boss.delay, attacks: boss.attacks },
+        huyenDao: {
+          running: huyen.running,
+          delay: huyen.delay,
+          maxRuns: huyen.maxRuns,
+          runs: huyen.runs,
+          steps: huyen.steps,
+          cpId: huyen.cpId,
+          policyVersion: huyen.policy && huyen.policy.version,
+          lastChoice: huyen.lastChoice,
+        },
       };
     },
   };
 
   ensureOverlay();
-  LOG('Đã nạp. auto() Di Tích · autoCauCa() Câu Cá · autoLinhDien() Linh Điền · autoBoss() Boss Thế Giới · stopAll() dừng tất cả.');
+  LOG('Đã nạp. auto() Di Tích · autoCauCa() Câu Cá · autoLinhDien() Linh Điền · autoBoss() Boss Thế Giới · autoHuyenDao() Huyễn Đạo · stopAll() dừng tất cả.');
 })();
